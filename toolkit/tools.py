@@ -1,47 +1,40 @@
+import os
 from langchain.tools import tool
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from lancedb.rerankers import LinearCombinationReranker
-from langchain_community.vectorstores import LanceDB
 from langchain_community.tools import TavilySearchResults
 from langchain_community.tools.polygon.financials import PolygonFinancials
 from langchain_community.utilities.polygon import PolygonAPIWrapper
-from langchain_community.tools.bing_search import BingSearchResults
-import os
-import sys
+from langchain_community.tools.bing_search import BingSearchResults 
+from data_models.models import RagToolSchema
+from langchain_pinecone import PineconeVectorStore
+from utils.model_loaders import ModelLoader
+from utils.config_loader import load_config
+from dotenv import load_dotenv
+from pinecone import Pinecone
+load_dotenv()
+api_wrapper = PolygonAPIWrapper()
+model_loader=ModelLoader()
+config = load_config()
 
-# Ensure project root (parent of `toolkit`) is on sys.path so imports like
-# `data_models` work when this module is run directly.
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
-
-import data_models.models
-
-@tool(args_schema=data_models.models.RagToolSchema)
+@tool(args_schema=RagToolSchema)
 def retriever_tool(question):
-    """A tool that retrieves relevant documents from a vector store based on a query."""
-    pass
-@tool
-def tavily_tool(question:str):
-    """A tool that retrieves search results from Tavily based on a query."""
-    # instantiate the Tavily search tool and run the query
-    tool = TavilySearchResults()
-    return tool.run(question)
-@tool
-def create_polygon_tool(question:str):
-    """A tool that retrieves financial data from Polygon based on a query."""
-    # instantiate the Polygon financials tool and run the query
-    tool = PolygonFinancials()
-    return tool.run(question)
+    """this is retriever tool"""
+    pinecone_api_key = os.getenv("PINECONE_API_KEY")
+    pc = Pinecone(api_key=pinecone_api_key)
+    vector_store = PineconeVectorStore(index=pc.Index(config["vector_db"]["index_name"]), 
+                            embedding= model_loader.load_embeddings())
+    retriever = vector_store.as_retriever(
+        search_type="similarity_score_threshold",
+        search_kwargs={"k": config["retriever"]["top_k"] , "score_threshold": config["retriever"]["score_threshold"]},
+    )
+    retriever_result=retriever.invoke(question)
+    
+    return retriever_result
 
-def create_bing_tool(question:str):
-    """A tool that retrieves search results from Bing based on a query."""
-    # instantiate the Bing search tool and run the query
-    tool = BingSearchResults()
-    return tool.run(question)
+tavilytool = TavilySearchResults(
+    max_results=config["tools"]["tavily"]["max_results"],
+    search_depth="advanced",
+    include_answer=True,
+    include_raw_content=True,
+    )
 
-def get_all_tools():
-    return [retriever_tool, tavily_tool, create_polygon_tool, create_bing_tool]
-
-if __name__ == "__main__":
-    print(get_all_tools())
+financials_tool = PolygonFinancials(api_wrapper=api_wrapper)
